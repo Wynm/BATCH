@@ -1,0 +1,55 @@
+name: BATCH CI & Finite AI Task Runner
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      prompts_file:
+        description: Optional JSONL prompts file to run via BATCH CLI
+        required: false
+        default: ''
+
+jobs:
+  verify-and-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run unit and E2E tests
+        run: npm test
+
+      - name: Run Clean-Room Craft Inspection
+        run: node --no-warnings src/cli/batch-cli.mjs inspect . > inspection.json
+
+      - name: Run Finite Batch Job (when prompts_file is supplied)
+        if: ${{ inputs.prompts_file != '' }}
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          BATCH_ENABLE_DEMO_PROVIDER: 'false'
+        run: |
+          node --no-warnings src/cli/batch-cli.mjs run-file \
+            --input "${{ inputs.prompts_file }}" \
+            --output batch-results.jsonl \
+            --model auto-free \
+            --concurrency 2
+
+      - name: Upload inspection / batch artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: batch-ci-artifacts
+          path: |
+            inspection.json
+            batch-results.jsonl
+          if-no-files-found: ignore

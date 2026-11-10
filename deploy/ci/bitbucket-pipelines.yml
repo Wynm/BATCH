@@ -1,0 +1,31 @@
+image: node:22
+
+pipelines:
+  default:
+    - step:
+        name: Test BATCH Gateway & Craft Inspector
+        script:
+          - npm test
+          - node --no-warnings src/cli/batch-cli.mjs doctor
+          - node --no-warnings src/cli/batch-cli.mjs inspect . > inspection.json
+        artifacts:
+          - inspection.json
+
+  custom:
+    run-batch-jsonl:
+      - step:
+          name: Execute Finite JSONL Batch Job
+          script:
+            - |
+              if [ -f "prompts.jsonl" ]; then
+                BATCH_ENABLE_DEMO_PROVIDER=false node --no-warnings src/cli/batch-cli.mjs run-file \
+                  --input prompts.jsonl \
+                  --output batch-results.jsonl \
+                  --model auto-free \
+                  --concurrency 2
+              else
+                echo "Create prompts.jsonl in repository root before triggering this pipeline."
+                exit 1
+              fi
+          artifacts:
+            - batch-results.jsonl

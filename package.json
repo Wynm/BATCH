@@ -1,0 +1,20 @@
+{
+  "name": "batch-ai-gateway",
+  "version": "0.1.0",
+  "description": "BATCH — Unified OpenAI/Anthropic-compatible AI gateway, multi-provider failover router, batch runner, clean-room inspector, and MCP server",
+  "type": "module",
+  "bin": {
+    "batch": "./src/cli/batch-cli.mjs"
+  },
+  "scripts": {
+    "start": "node --no-warnings src/server/main.mjs",
+    "dev": "node --no-warnings --watch src/server/main.mjs",
+    "mcp": "node --no-warnings src/mcp/server.mjs",
+    "cli": "node --no-warnings src/cli/batch-cli.mjs",
+    "test": "node --no-warnings --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "license": "MIT"
+}
