@@ -1,0 +1,39 @@
+stages:
+  - test
+  - batch
+
+variables:
+  BATCH_ENABLE_DEMO_PROVIDER: "false"
+
+test_gateway:
+  stage: test
+  image: node:22-alpine
+  script:
+    - node --version
+    - npm test
+    - node --no-warnings src/cli/batch-cli.mjs inspect . > inspection.json
+  artifacts:
+    paths:
+      - inspection.json
+    expire_in: 7 days
+
+run_batch_pipeline:
+  stage: batch
+  image: node:22-alpine
+  when: manual
+  script:
+    - |
+      if [ -f "prompts.jsonl" ]; then
+        node --no-warnings src/cli/batch-cli.mjs run-file \
+          --input prompts.jsonl \
+          --output batch-results.jsonl \
+          --model auto-free \
+          --concurrency 2
+      else
+        echo "No prompts.jsonl found; running doctor check."
+        node --no-warnings src/cli/batch-cli.mjs doctor
+      fi
+  artifacts:
+    paths:
+      - batch-results.jsonl
+    expire_in: 7 days

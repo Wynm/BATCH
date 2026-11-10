@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BATCH — Unified AI Gateway &amp; Batch Cockpit</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo-mark">B</div>
+        <div>
+          <h1>BATCH <span class="badge badge-accent">v0.1</span></h1>
+          <p class="subtitle" data-i18n="subtitle">Unified AI Gateway · Smart Failover · Batch Engine · Craft Inspector · MCP</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="health-pill" class="pill pill-ok">● Online</span>
+        <button id="lang-toggle" class="btn btn-ghost" type="button">العربية / EN</button>
+        <button id="refresh-btn" class="btn btn-secondary" type="button" data-i18n="refresh">Refresh</button>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="playground" data-i18n="tabPlayground">Playground &amp; Overview</button>
+      <button class="tab" data-tab="providers" data-i18n="tabProviders">Providers &amp; Vault</button>
+      <button class="tab" data-tab="combos" data-i18n="tabCombos">Combos &amp; Routing</button>
+      <button class="tab" data-tab="batches" data-i18n="tabBatches">Batch Runner</button>
+      <button class="tab" data-tab="craft" data-i18n="tabCraft">Craft, MCP &amp; Deploy</button>
+    </nav>
+
+    <main class="content">
+      <!-- TAB 1: OVERVIEW & PLAYGROUND -->
+      <section id="panel-playground" class="panel active">
+        <div class="metrics-grid" id="metrics-grid">
+          <div class="metric-card"><span class="metric-label" data-i18n="mTotal">Total Requests</span><strong id="m-total">0</strong></div>
+          <div class="metric-card"><span class="metric-label" data-i18n="mReady">Ready Providers</span><strong id="m-ready">0</strong></div>
+          <div class="metric-card"><span class="metric-label" data-i18n="mCache">Cache Hit Rate</span><strong id="m-cache">0%</strong></div>
+          <div class="metric-card"><span class="metric-label" data-i18n="mLatency">Avg Latency</span><strong id="m-latency">0 ms</strong></div>
+        </div>
+
+        <div class="split-2">
+          <div class="card">
+            <div class="card-header">
+              <h2 data-i18n="playgroundTitle">Interactive Router Playground</h2>
+              <span class="badge" data-i18n="openaiCompat">/v1/chat/completions</span>
+            </div>
+            <form id="playground-form" class="stack">
+              <div class="row-2">
+                <label>
+                  <span data-i18n="targetCombo">Combo or Provider/Model</span>
+                  <select id="pg-model"></select>
+                </label>
+                <label>
+                  <span data-i18n="temperature">Temperature</span>
+                  <input id="pg-temp" type="number" step="0.1" min="0" max="2" value="0.2" />
+                </label>
+              </div>
+              <label>
+                <span data-i18n="systemPrompt">System Prompt (optional)</span>
+                <input id="pg-system" type="text" placeholder="You are a concise software architect..." />
+              </label>
+              <label>
+                <span data-i18n="userPrompt">User Prompt</span>
+                <textarea id="pg-prompt" rows="4" placeholder="Explain how BATCH combines free-tier failover and local Ollama for resilient workflows."></textarea>
+              </label>
+              <div class="row-between">
+                <label class="checkbox-inline">
+                  <input id="pg-bypass-cache" type="checkbox" />
+                  <span data-i18n="bypassCache">Bypass Cache</span>
+                </label>
+                <button class="btn btn-primary" type="submit" id="pg-send" data-i18n="sendPrompt">Route Request</button>
+              </div>
+            </form>
+            <div id="pg-result" class="result-box hidden">
+              <div class="result-meta" id="pg-meta"></div>
+              <pre id="pg-output" class="code-output"></pre>
+              <details>
+                <summary data-i18n="failoverTrace">Failover &amp; Routing Trace</summary>
+                <pre id="pg-trace" class="code-output small"></pre>
+              </details>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2 data-i18n="recentLogs">Recent Gateway Logs</h2>
+              <button id="clear-cache-btn" class="btn btn-ghost btn-sm" type="button" data-i18n="clearCache">Clear Cache</button>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Model</th>
+                    <th>Status</th>
+                    <th>Latency</th>
+                  </tr>
+                </thead>
+                <tbody id="logs-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: PROVIDERS & VAULT -->
+      <section id="panel-providers" class="panel">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 data-i18n="providersTitle">Provider Registry &amp; AES-256-GCM Key Vault</h2>
+              <p class="muted" data-i18n="providersDesc">Configure official API keys (encrypted at rest) or enable local unlimited engines like Ollama. Single official key per provider; respects rate limits cleanly.</p>
+            </div>
+          </div>
+          <div id="providers-list" class="providers-grid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2 data-i18n="addCustomProvider">Add / Update Custom OpenAI-Compatible Provider</h2>
+          </div>
+          <form id="custom-provider-form" class="grid-form">
+            <label><span>ID</span><input name="id" required placeholder="custom-vllm" /></label>
+            <label><span>Name</span><input name="name" required placeholder="Self-Hosted vLLM" /></label>
+            <label><span>Kind</span>
+              <select name="kind">
+                <option value="openai-compatible">openai-compatible</option>
+                <option value="local-openai">local-openai</option>
+                <option value="anthropic">anthropic</option>
+              </select>
+            </label>
+            <label><span>Base URL</span><input name="baseUrl" required placeholder="http://localhost:8000/v1" /></label>
+            <label><span>Default Model</span><input name="defaultModel" required placeholder="Qwen/Qwen2.5-Coder-32B" /></label>
+            <label><span>API Key (optional for local)</span><input name="apiKey" type="password" placeholder="sk-..." /></label>
+            <label><span>RPM Limit</span><input name="rpmLimit" type="number" value="60" /></label>
+            <label><span>Priority</span><input name="priority" type="number" value="85" /></label>
+            <div class="form-end">
+              <button class="btn btn-primary" type="submit" data-i18n="saveProvider">Save Provider</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB 3: COMBOS & ROUTING -->
+      <section id="panel-combos" class="panel">
+        <div class="split-2">
+          <div class="card">
+            <div class="card-header"><h2 data-i18n="combosTitle">Routing Combos (Fallback Chains)</h2></div>
+            <div id="combos-list" class="stack"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 data-i18n="saveComboTitle">Create / Update Routing Combo</h2></div>
+            <form id="combo-form" class="stack">
+              <label><span>Combo ID</span><input id="combo-id" required placeholder="my-resilient-chain" /></label>
+              <label><span>Display Name</span><input id="combo-name" required placeholder="My Resilient Chain" /></label>
+              <label><span>Strategy</span>
+                <select id="combo-strategy">
+                  <option value="failover">failover (ordered priority chain)</option>
+                  <option value="round-robin">round-robin (spread across healthy providers)</option>
+                  <option value="lowest-latency">lowest-latency (EWMA latency sort)</option>
+                </select>
+              </label>
+              <label><span>Ordered Provider IDs (comma-separated)</span><input id="combo-providers" required placeholder="groq, gemini, nvidia, ollama, sandbox-sim" /></label>
+              <label><span>Description</span><input id="combo-desc" placeholder="Primary free cloud tiers with local Ollama backup" /></label>
+              <button class="btn btn-primary" type="submit" data-i18n="saveCombo">Save Combo</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: BATCH RUNNER -->
+      <section id="panel-batches" class="panel">
+        <div class="split-2">
+          <div class="card">
+            <div class="card-header"><h2 data-i18n="submitBatchTitle">Submit Batch Job</h2></div>
+            <form id="batch-form" class="stack">
+              <div class="row-2">
+                <label><span>Job Name</span><input id="batch-name" value="Experiment Batch Run" /></label>
+                <label><span>Target Combo / Model</span><select id="batch-model"></select></label>
+              </div>
+              <div class="row-2">
+                <label><span>Concurrency (1–8)</span><input id="batch-concurrency" type="number" min="1" max="8" value="3" /></label>
+                <label><span>System Prompt (optional)</span><input id="batch-system" placeholder="Answer concisely in 2 sentences." /></label>
+              </div>
+              <label>
+                <span data-i18n="batchPromptsLabel">Prompts (one per line, or JSONL objects with {"custom_id","prompt"})</span>
+                <textarea id="batch-items" rows="7">Summarize the trade-offs between circuit breakers and simple retries.
+List 3 benefits of running local Ollama as a gateway fallback.
+Write a minimal OpenAI Python SDK snippet targeting a custom base_url.
+Suggest 2 clean CI checks for an API gateway repo.</textarea>
+              </label>
+              <button class="btn btn-primary" type="submit" data-i18n="launchBatch">Launch Batch Job</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h2 data-i18n="batchJobsTitle">Batch Jobs &amp; Outputs</h2></div>
+            <div id="batches-list" class="stack"></div>
+            <div id="batch-detail" class="result-box hidden"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: CRAFT, MCP & DEPLOY -->
+      <section id="panel-craft" class="panel">
+        <div class="split-2">
+          <div class="card">
+            <div class="card-header">
+              <h2 data-i18n="craftInspectorTitle">Craft Clean-Room Workspace Inspector</h2>
+              <span class="badge">MCP + Local</span>
+            </div>
+            <form id="inspect-form" class="row-inline">
+              <input id="inspect-path" value="." placeholder="Relative path (e.g. . or src)" />
+              <button class="btn btn-primary" type="submit" data-i18n="inspectBtn">Inspect Workspace</button>
+            </form>
+            <pre id="inspect-output" class="code-output small" style="margin-top:12px;">Click "Inspect Workspace" to analyze repository structure, languages, manifests, and entrypoints.</pre>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2 data-i18n="agentBridgeTitle">Agent &amp; IDE Integration Snippets</h2>
+            </div>
+            <div id="client-configs" class="stack"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2 data-i18n="deployTitle">CI/CD Batch Pipelines &amp; Self-Hosted Docker + Neko Workspace</h2>
+          </div>
+          <div class="info-grid">
+            <div class="info-box">
+              <h3>GitHub Actions / GitLab CI / Bitbucket</h3>
+              <p class="muted">Templates in <code>deploy/ci/</code> execute finite, automated batch tasks (PR code analysis, doc generation, prompt suites) using repository secrets and clean exit codes — without persistent runner abuse.</p>
+            </div>
+            <div class="info-box">
+              <h3>Docker Compose + Ollama + Neko</h3>
+              <p class="muted"><code>deploy/docker/docker-compose.yml</code> runs BATCH Gateway + local unlimited <strong>Ollama</strong> + optional <strong>m1k1o/neko</strong> isolated WebRTC browser (<code>--profile browser</code>) for self-hosted VPS or Codespaces setups.</p>
+            </div>
+            <div class="info-box">
+              <h3>MCP Server (stdio &amp; HTTP /mcp)</h3>
+              <p class="muted">Connect coding agents (Claude Code, OpenCode, Cursor, Antigravity ACP clients) to <code>POST /mcp</code> or <code>npm run mcp</code> for <code>batch_chat</code>, <code>batch_submit_job</code>, and <code>craft_inspect_workspace</code>.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+services:
+  batch-gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: batch-gateway
+    ports:
+      - "20128:20128"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "20128"
+      DATA_DIR: "/app/data"
+      OLLAMA_BASE_URL: "http://ollama:11434/v1"
+      BATCH_ENABLE_DEMO_PROVIDER: "true"
+      # Optional: pass single official keys or configure them in the Dashboard Vault
+      # GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      # GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      # OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      # NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
+      # BATCH_API_KEY: "${BATCH_API_KEY:-}"
+    volumes:
+      - batch_data:/app/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: batch-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
+  # Optional isolated WebRTC virtual browser workspace (enable via: docker compose --profile browser up -d)
+  neko:
+    image: ghcr.io/m1k1o/neko/chromium:latest
+    container_name: batch-neko-browser
+    profiles: ["browser"]
+    shm_size: "2gb"
+    ports:
+      - "8080:8080"
+      - "52000-52100:52000-52100/udp"
+    environment:
+      NEKO_SCREEN: "1920x1080@30"
+      NEKO_PASSWORD: "${NEKO_PASSWORD:-neko}"
+      NEKO_PASSWORD_ADMIN: "${NEKO_ADMIN_PASSWORD:-admin}"
+      NEKO_EPR: "52000-52100"
+      NEKO_NAT1TO1: "${NEKO_HOST_IP:-127.0.0.1}"
+    restart: unless-stopped
+
+volumes:
+  batch_data:
+  ollama_models:
