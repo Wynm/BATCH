@@ -27,6 +27,12 @@ jobs:
       - name: Run unit and E2E tests
         run: npm test
 
+      - name: Prove failover behaviour (offline, no secrets)
+        run: npm run --silent proof
+
+      - name: Run deterministic bench (offline target)
+        run: npm run --silent bench -- --json > bench.json
+
       - name: Run Clean-Room Craft Inspection
         run: node --no-warnings src/cli/batch-cli.mjs inspect . > inspection.json
 
@@ -51,5 +57,6 @@ jobs:
           name: batch-ci-artifacts
           path: |
             inspection.json
+            bench.json
             batch-results.jsonl
           if-no-files-found: ignore

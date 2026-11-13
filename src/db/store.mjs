@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { PROVIDERS_CATALOG, DEFAULT_COMBOS } from '../config/providersCatalog.mjs';
 import { encryptSecret, decryptSecret, maskSecret } from '../security/vault.mjs';
+import { SELF_CONTAINED_KINDS } from '../config/providerKinds.mjs';
 
 export class Store {
   constructor(dbPath, masterKey, options = {}) {
@@ -97,7 +98,22 @@ export class Store {
         updated_at INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS bench_runs (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        suite_ids_json TEXT NOT NULL,
+        targets_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        total_cases INTEGER NOT NULL,
+        passed_cases INTEGER NOT NULL,
+        score REAL NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_batch_items_job ON batch_items(job_id, seq);
+      CREATE INDEX IF NOT EXISTS idx_bench_runs_created ON bench_runs(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at DESC);
     `);
   }
@@ -120,7 +136,9 @@ export class Store {
       const existing = existingProviderStmt.get(p.id);
       if (!existing) {
         const encrypted = envSecret ? encryptSecret(envSecret, this.masterKey) : null;
-        const enabled = p.id === 'sandbox-sim'
+        // Self-contained engines (simulator, micro reflex engine) need no key;
+        // they are gated by the demo switch instead.
+        const enabled = SELF_CONTAINED_KINDS.has(p.kind)
           ? (this.enableDemo ? 1 : 0)
           : (envSecret ? 1 : 0);
         insertProviderStmt.run(
@@ -166,7 +184,17 @@ export class Store {
 
   _hydrateProvider(row, includeSecret = false) {
     if (!row) return null;
-    const rawKey = row.encrypted_api_key ? decryptSecret(row.encrypted_api_key, this.masterKey) : null;
+    let rawKey = null;
+    let keyError = null;
+    if (row.encrypted_api_key) {
+      try {
+        rawKey = decryptSecret(row.encrypted_api_key, this.masterKey);
+      } catch (err) {
+        // A rotated/lost master key used to crash the whole provider list.
+        // Fail per-provider and surface it instead of taking the gateway down.
+        keyError = err.message;
+      }
+    }
     const result = {
       id: row.id,
       name: row.name,
@@ -183,6 +211,7 @@ export class Store {
       notes: row.notes || '',
       docsUrl: row.docs_url || '',
       updatedAt: row.updated_at,
+      keyError,
     };
     if (includeSecret) {
       result.apiKey = rawKey;
@@ -505,6 +534,54 @@ export class Store {
       now,
       itemId,
     );
+  }
+
+  saveBenchRun(run) {
+    this.db.prepare(`
+      INSERT INTO bench_runs (
+        id, name, suite_ids_json, targets_json, status, total_cases,
+        passed_cases, score, duration_ms, created_at, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      run.id,
+      run.name,
+      JSON.stringify(run.suiteIds),
+      JSON.stringify(run.targets),
+      run.status,
+      run.summary?.cases ?? run.results.length,
+      run.summary?.passed ?? 0,
+      run.summary?.score ?? 0,
+      run.durationMs,
+      run.createdAt,
+      JSON.stringify(run),
+    );
+    return run.id;
+  }
+
+  listBenchRuns(limit = 20) {
+    return this.db.prepare(`
+      SELECT id, name, suite_ids_json, targets_json, status, total_cases,
+             passed_cases, score, duration_ms, created_at
+      FROM bench_runs ORDER BY created_at DESC LIMIT ?
+    `).all(limit).map((row) => ({
+      id: row.id,
+      name: row.name,
+      suiteIds: JSON.parse(row.suite_ids_json),
+      targets: JSON.parse(row.targets_json),
+      status: row.status,
+      totalCases: row.total_cases,
+      passedCases: row.passed_cases,
+      passRate: row.total_cases ? row.passed_cases / row.total_cases : 0,
+      score: row.score,
+      durationMs: row.duration_ms,
+      createdAt: row.created_at,
+    }));
+  }
+
+  getBenchRun(id) {
+    const row = this.db.prepare('SELECT payload_json FROM bench_runs WHERE id = ?').get(id);
+    if (!row) return null;
+    try { return JSON.parse(row.payload_json); } catch { return null; }
   }
 
   close() {

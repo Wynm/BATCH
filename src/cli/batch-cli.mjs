@@ -2,9 +2,12 @@
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { getConfig } from '../config/env.mjs';
+import { isProviderConfigured } from '../config/providerKinds.mjs';
 import { Store } from '../db/store.mjs';
 import { GatewayRouter } from '../router/gateway.mjs';
 import { BatchRunner } from '../batch/runner.mjs';
+import { BenchRunner } from '../bench/runner.mjs';
+import { runResilienceProof } from '../proof/resilienceLab.mjs';
 import { inspectWorkspace } from '../craft/inspector.mjs';
 import { generateClientConfigs } from '../craft/clientConfigs.mjs';
 
@@ -38,6 +41,8 @@ Commands:
   run-file --input <file.jsonl>   Execute batch prompts from JSONL/TXT (--output out.jsonl --model auto-free --concurrency 2)
   inspect [path]                  Clean-room workspace architecture & manifest inspection
   export-config [--url <origin>]  Print client configs for OpenCode, Cursor, Continue, Claude Code
+  bench                          Run deterministic benchmark suites (--suite a,b --model x,y --json)
+  proof                          Prove failover/breaker/cache behaviour against scripted upstreams
 `);
 }
 
@@ -70,7 +75,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   try {
     if (command === 'doctor') {
       const providers = store.listProviders(false);
-      const ready = providers.filter((p) => p.enabled && (p.hasApiKey || p.kind === 'local-openai' || p.kind === 'simulator'));
+      const ready = providers.filter((p) => isProviderConfigured(p));
       console.log(`Node.js:          ${process.version}`);
       console.log(`Database:         ${cfg.dbPath}`);
       console.log(`Providers total:  ${providers.length}`);
@@ -80,6 +85,53 @@ export async function runCli(argv = process.argv.slice(2)) {
         console.log(`  - ${p.id.padEnd(14)} [${p.tier}] model=${p.defaultModel} -> ${probe.ok ? 'READY' : `ERR: ${probe.error}`}`);
       }
       return 0;
+    }
+
+    if (command === 'bench') {
+      const splitList = (value) => (value && typeof value === 'string' ? value.split(',').map((v) => v.trim()).filter(Boolean) : undefined);
+      const benchRunner = new BenchRunner(store, router);
+      const run = await benchRunner.run({
+        suiteIds: splitList(flags.suite || flags.suites),
+        targets: splitList(flags.model || flags.targets) || ['offline-proof'],
+        concurrency: Number(flags.concurrency || 4),
+        name: flags.name ? String(flags.name) : undefined,
+      });
+
+      if (flags.json) {
+        console.log(JSON.stringify(run, null, 2));
+      } else {
+        console.log(`Bench ${run.id} — ${run.summary.passed}/${run.summary.cases} cases passed in ${run.durationMs}ms`);
+        for (const card of run.scorecards) {
+          console.log(`\n  ${card.target}`);
+          console.log(`    pass ${card.passed}/${card.cases} (${Math.round(card.passRate * 100)}%) · score ${(card.score * 100).toFixed(0)}% · p50 ${card.latencyMs.p50}ms · p95 ${card.latencyMs.p95}ms`);
+          for (const suite of card.suites) {
+            console.log(`      ${suite.id.padEnd(16)} ${suite.passed}/${suite.cases}`);
+          }
+          const failures = run.results.filter((r) => r.target === card.target && !r.passed);
+          for (const failure of failures.slice(0, 4)) {
+            console.log(`      ✗ ${failure.caseId}: ${failure.detail}`);
+          }
+          if (failures.length > 4) console.log(`      … ${failures.length - 4} more failures`);
+        }
+      }
+      return run.summary.failed === 0 ? 0 : 1;
+    }
+
+    if (command === 'proof') {
+      const report = await runResilienceProof();
+      if (flags.json) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        const s = report.summary;
+        console.log(`Failover proof — ${s.passed}/${s.scenarios} scenarios · ${s.checksPassed}/${s.checks} assertions · ${report.durationMs}ms\n`);
+        for (const result of report.results) {
+          console.log(`  ${result.passed ? 'PASS' : 'FAIL'}  ${result.id.padEnd(20)} ${result.durationMs}ms`);
+          for (const c of result.checks) {
+            console.log(`        ${c.passed ? '✓' : '✗'} ${c.label}${c.detail ? ` — ${c.detail}` : ''}`);
+          }
+        }
+      }
+      return report.summary.allPassed ? 0 : 1;
     }
 
     if (command === 'chat') {

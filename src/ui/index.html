@@ -28,6 +28,7 @@
       <button class="tab" data-tab="providers" data-i18n="tabProviders">Providers &amp; Vault</button>
       <button class="tab" data-tab="combos" data-i18n="tabCombos">Combos &amp; Routing</button>
       <button class="tab" data-tab="batches" data-i18n="tabBatches">Batch Runner</button>
+      <button class="tab" data-tab="proof" data-i18n="tabProof">Proof Lab &amp; Bench</button>
       <button class="tab" data-tab="craft" data-i18n="tabCraft">Craft, MCP &amp; Deploy</button>
     </nav>
 
@@ -64,7 +65,7 @@
               </label>
               <label>
                 <span data-i18n="userPrompt">User Prompt</span>
-                <textarea id="pg-prompt" rows="4" placeholder="Explain how BATCH combines free-tier failover and local Ollama for resilient workflows."></textarea>
+                <textarea id="pg-prompt" rows="4" placeholder="CALC: 37*43+11 · احسب: ٢٥ × ٤ · SORT: 8, 3, 11 — or any prompt once a real provider key is configured."></textarea>
               </label>
               <div class="row-between">
                 <label class="checkbox-inline">
@@ -204,7 +205,52 @@ Suggest 2 clean CI checks for an API gateway repo.</textarea>
         </div>
       </section>
 
-      <!-- TAB 5: CRAFT, MCP & DEPLOY -->
+      <!-- TAB 5: PROOF LAB & BENCH -->
+      <section id="panel-proof" class="panel">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 data-i18n="proofTitle">Failover Proof Lab</h2>
+              <p class="muted" data-i18n="proofDesc">Runs the real router — circuit breaker, token bucket, cache, timeout — against scripted upstreams (429, revoked key, hung socket, total outage) and asserts on what actually happened. No mocks at the routing layer.</p>
+            </div>
+            <button id="proof-run" class="btn btn-primary" type="button" data-i18n="runProof">Run proof suite</button>
+          </div>
+          <div id="proof-summary" class="proof-summary muted" data-i18n="proofIdle">Not run yet. 8 scenarios · 34 assertions.</div>
+          <div id="proof-results" class="proof-grid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 data-i18n="benchTitle">Model Bench (deterministic grading)</h2>
+              <p class="muted" data-i18n="benchDesc">Mechanically graded suites — arithmetic, unit conversion, ordering, JSON extraction, Arabic commands. No LLM judge: an echoing provider scores zero, and that is the point.</p>
+            </div>
+          </div>
+          <div class="row-2">
+            <label>
+              <span data-i18n="benchSuites">Suites</span>
+              <div id="bench-suite-list" class="chip-group"></div>
+            </label>
+            <label>
+              <span data-i18n="benchTargets">Targets (combos or provider/model)</span>
+              <div id="bench-target-list" class="chip-group"></div>
+            </label>
+          </div>
+          <div class="row-between" style="margin-top:12px;">
+            <span class="muted" id="bench-hint" data-i18n="benchHint">Tip: compare offline-proof (deterministic engine) with sandbox-sim (echo) to see the grader discriminate.</span>
+            <button id="bench-run" class="btn btn-primary" type="button" data-i18n="runBench">Run bench</button>
+          </div>
+          <div id="bench-scorecards" class="bench-grid"></div>
+          <div id="bench-detail" class="table-wrap hidden"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2 data-i18n="benchHistory">Recent bench runs</h2></div>
+          <div id="bench-history" class="stack"><p class="muted">No runs yet.</p></div>
+        </div>
+      </section>
+
+      <!-- TAB 6: CRAFT, MCP & DEPLOY -->
       <section id="panel-craft" class="panel">
         <div class="split-2">
           <div class="card">

@@ -11,10 +11,13 @@ test_gateway:
   script:
     - node --version
     - npm test
+    - npm run --silent proof
+    - npm run --silent bench -- --json > bench.json
     - node --no-warnings src/cli/batch-cli.mjs inspect . > inspection.json
   artifacts:
     paths:
       - inspection.json
+      - bench.json
     expire_in: 7 days
 
 run_batch_pipeline:

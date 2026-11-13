@@ -335,3 +335,122 @@ textarea { resize: vertical; }
 }
 
 [dir="rtl"] .data-table th, [dir="rtl"] .data-table td { text-align: right; }
+
+
+/* ---------------- Proof Lab & Bench ---------------- */
+
+.chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.chip:hover { border-color: var(--accent); }
+.chip input { accent-color: var(--accent); margin: 0; }
+
+.proof-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 4px 0 14px;
+}
+
+.proof-grid,
+.bench-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 14px;
+}
+
+.proof-card,
+.bench-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.proof-pass { border-left: 3px solid var(--ok); }
+.proof-fail { border-left: 3px solid var(--err); }
+
+.proof-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.check-list {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.check-ok { color: #a7f3c0; }
+.check-bad { color: #fca5a5; }
+
+.score-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #0d1424;
+  overflow: hidden;
+  margin: 10px 0;
+}
+
+.score-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.45s ease;
+}
+
+.bench-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bench-stats strong { color: var(--text); }
+
+.suite-breakdown {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.history-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cell-code {
+  font-size: 11px;
+  color: #c7d2fe;
+  white-space: pre-wrap;
+}
+
+#bench-detail { margin-top: 16px; }
