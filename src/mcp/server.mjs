@@ -4,6 +4,9 @@ import { getConfig } from '../config/env.mjs';
 import { Store } from '../db/store.mjs';
 import { GatewayRouter } from '../router/gateway.mjs';
 import { BatchRunner } from '../batch/runner.mjs';
+import { BenchRunner } from '../bench/runner.mjs';
+import { runResilienceProof } from '../proof/resilienceLab.mjs';
+import { isProviderReady } from '../config/providerKinds.mjs';
 import { inspectWorkspace } from '../craft/inspector.mjs';
 import { generateClientConfigs } from '../craft/clientConfigs.mjs';
 
@@ -54,6 +57,28 @@ export const MCP_TOOLS = [
     },
   },
   {
+    name: 'batch_run_bench',
+    description: 'Run mechanically graded benchmark suites (reflex-core, structured-data, arabic-first) against routing targets and return a scorecard.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        suiteIds: { type: 'array', items: { type: 'string' } },
+        targets: { type: 'array', items: { type: 'string' }, description: 'Combo IDs or provider/model strings' },
+        concurrency: { type: 'integer' },
+      },
+    },
+  },
+  {
+    name: 'batch_proof_lab',
+    description: 'Prove failover behaviour: run the real router against scripted upstream failures (429, 401, 5xx, timeout, rate limits) and return assertions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scenarios: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  },
+  {
     name: 'craft_inspect_workspace',
     description: 'Clean-room inspect local project structure, languages, manifests, or a single file inside the workspace root.',
     inputSchema: {
@@ -76,10 +101,11 @@ export const MCP_TOOLS = [
 ];
 
 export class McpHandler {
-  constructor({ store, router, batchRunner, workspaceRoot, baseUrl }) {
+  constructor({ store, router, batchRunner, benchRunner, workspaceRoot, baseUrl }) {
     this.store = store;
     this.router = router;
     this.batchRunner = batchRunner;
+    this.benchRunner = benchRunner ?? (store && router ? new BenchRunner(store, router) : null);
     this.workspaceRoot = workspaceRoot;
     this.baseUrl = baseUrl || 'http://localhost:20128';
   }
@@ -170,7 +196,8 @@ export class McpHandler {
       }
 
       case 'batch_list_providers': {
-        const providers = this.store.listProviders(false);
+        const providers = this.store.listProviders(false)
+          .map((p) => ({ ...p, ready: isProviderReady({ ...p, apiKey: p.hasApiKey ? 'set' : null }) }));
         const breakers = this.router.circuitBreaker.snapshot(providers.map((p) => p.id));
         const combos = this.store.listCombos();
         return { providers, circuitBreakers: breakers, combos };
@@ -196,6 +223,20 @@ export class McpHandler {
         return job;
       }
 
+      case 'batch_run_bench': {
+        if (!this.benchRunner) throw new Error('Bench runner unavailable');
+        return this.benchRunner.run({
+          suiteIds: Array.isArray(args.suiteIds) ? args.suiteIds : undefined,
+          targets: Array.isArray(args.targets) && args.targets.length ? args.targets : ['offline-proof'],
+          concurrency: args.concurrency,
+        });
+      }
+
+      case 'batch_proof_lab': {
+        const report = await runResilienceProof({ only: Array.isArray(args.scenarios) ? args.scenarios : undefined });
+        return report;
+      }
+
       case 'craft_inspect_workspace': {
         return inspectWorkspace(this.workspaceRoot, args.path || '.');
       }
@@ -215,10 +256,12 @@ export function startStdioMcpServer() {
   const store = new Store(cfg.dbPath, cfg.masterKey, { enableDemo: cfg.enableDemo });
   const router = new GatewayRouter(store);
   const batchRunner = new BatchRunner(store, router);
+  const benchRunner = new BenchRunner(store, router);
   const handler = new McpHandler({
     store,
     router,
     batchRunner,
+    benchRunner,
     workspaceRoot: cfg.workspaceRoot,
     baseUrl: `http://localhost:${cfg.port}`,
   });

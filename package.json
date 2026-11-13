@@ -11,7 +11,9 @@
     "dev": "node --no-warnings --watch src/server/main.mjs",
     "mcp": "node --no-warnings src/mcp/server.mjs",
     "cli": "node --no-warnings src/cli/batch-cli.mjs",
-    "test": "node --no-warnings --test test/*.test.mjs"
+    "test": "node --no-warnings --test test/*.test.mjs",
+    "bench": "node --no-warnings src/cli/batch-cli.mjs bench",
+    "proof": "node --no-warnings src/cli/batch-cli.mjs proof"
   },
   "engines": {
     "node": ">=22.0.0"

@@ -36,6 +36,18 @@ const I18N = {
     inspectBtn: 'Inspect Workspace',
     agentBridgeTitle: 'Agent & IDE Integration Snippets',
     deployTitle: 'CI/CD Batch Pipelines & Self-Hosted Docker + Neko Workspace',
+    tabProof: 'Proof Lab & Bench',
+    proofTitle: 'Failover Proof Lab',
+    proofDesc: 'Runs the real router — circuit breaker, token bucket, cache, timeout — against scripted upstreams (429, revoked key, hung socket, total outage) and asserts on what actually happened. No mocks at the routing layer.',
+    runProof: 'Run proof suite',
+    proofIdle: 'Not run yet. 8 scenarios · 34 assertions.',
+    benchTitle: 'Model Bench (deterministic grading)',
+    benchDesc: 'Mechanically graded suites — arithmetic, unit conversion, ordering, JSON extraction, Arabic commands. No LLM judge: an echoing provider scores zero, and that is the point.',
+    benchSuites: 'Suites',
+    benchTargets: 'Targets (combos or provider/model)',
+    benchHint: 'Tip: compare offline-proof (deterministic engine) with sandbox-sim (echo) to see the grader discriminate.',
+    runBench: 'Run bench',
+    benchHistory: 'Recent bench runs',
   },
   ar: {
     subtitle: 'بوابة ذكاء اصطناعي موحدة · تبديل تلقائي ذكي · محرك دفعات · فاحص مشاريع · خادم MCP',
@@ -74,6 +86,18 @@ const I18N = {
     inspectBtn: 'فحص مساحة العمل',
     agentBridgeTitle: 'إعدادات ربط الوكلاء والمحررات',
     deployTitle: 'قوالب CI/CD وحاوية Docker + Ollama + Neko للاستضافة الذاتية',
+    tabProof: 'مختبر الإثبات والقياس',
+    proofTitle: 'مختبر إثبات التبديل التلقائي',
+    proofDesc: 'يشغّل الموجّه الحقيقي — قاطع الدارة، دلو الرموز، الكاش، والمهلة — أمام مزوّدين مُحاكين (429، مفتاح ملغى، اتصال معلّق، انقطاع كامل) ويتحقق مما حدث فعلاً. لا محاكاة على مستوى التوجيه.',
+    runProof: 'تشغيل حزمة الإثبات',
+    proofIdle: 'لم يُشغَّل بعد. ٨ سيناريوهات · ٣٤ تحققاً.',
+    benchTitle: 'مقياس النماذج (تصحيح حتمي)',
+    benchDesc: 'حزم تُصحَّح آلياً — حساب، تحويل وحدات، ترتيب، استخراج JSON، وأوامر عربية. لا حَكَم من نموذج لغوي: المزوّد الذي يردّد النص يحصل على صفر، وهذا هو المقصود.',
+    benchSuites: 'الحزم',
+    benchTargets: 'الأهداف (سلاسل أو مزود/نموذج)',
+    benchHint: 'جرّب مقارنة offline-proof (المحرك الحتمي) مع sandbox-sim (الصدى) لترى التصحيح يفرّق بينهما.',
+    runBench: 'تشغيل القياس',
+    benchHistory: 'أحدث عمليات القياس',
   },
 };
 
@@ -122,7 +146,7 @@ function renderOverview(data) {
   const { summary, cacheStats } = data.metrics;
   const total = summary.totalRequests || 0;
   const cacheRate = total > 0 ? Math.round(((summary.cacheHits || 0) / total) * 100) : 0;
-  const readyCount = data.providers.filter((p) => p.enabled && (p.hasApiKey || p.kind === 'local-openai' || p.kind === 'simulator')).length;
+  const readyCount = data.providers.filter((p) => p.ready).length;
 
   document.getElementById('m-total').textContent = String(total);
   document.getElementById('m-ready').textContent = `${readyCount} / ${data.providers.length}`;
@@ -138,6 +162,13 @@ function renderOverview(data) {
   ].join('');
   document.getElementById('pg-model').innerHTML = modelOptions;
   document.getElementById('batch-model').innerHTML = modelOptions;
+  const pgSelect = document.getElementById('pg-model');
+  if ([...pgSelect.options].some((o) => o.value === 'offline-proof') && !pgSelect.dataset.touched) {
+    pgSelect.value = 'offline-proof';
+  }
+  pgSelect.onchange = () => { pgSelect.dataset.touched = '1'; };
+  renderBenchChoosers(data);
+  renderBenchHistory(data.benchRuns || []);
 
   // Render logs
   const logsHtml = (data.recentLogs || []).slice(0, 18).map((l) => {
@@ -156,7 +187,7 @@ function renderOverview(data) {
     const cb = p.circuitBreaker;
     const cbState = cb?.effectiveState || 'closed';
     const cbBadge = cbState === 'closed' ? 'badge-ok' : cbState === 'half-open' ? 'badge-warn' : 'badge-err';
-    const ready = p.enabled && (p.hasApiKey || p.kind === 'local-openai' || p.kind === 'simulator');
+    const ready = Boolean(p.ready);
     const tierBadge = p.tier === 'local-unlimited' ? 'badge-ok' : p.tier === 'demo' ? 'badge-warn' : 'badge-accent';
 
     return `<div class="provider-card" data-pid="${esc(p.id)}">
@@ -329,7 +360,7 @@ document.getElementById('playground-form').addEventListener('submit', async (e) 
       model: document.getElementById('pg-model').value,
       temperature: Number(document.getElementById('pg-temp').value),
       system: document.getElementById('pg-system').value,
-      prompt: document.getElementById('pg-prompt').value || 'Explain how BATCH routes across free tiers and local Ollama.',
+      prompt: document.getElementById('pg-prompt').value || 'CALC: 37 * 43 + 11',
       bypassCache: document.getElementById('pg-bypass-cache').checked,
     };
     const res = await api('/api/playground', { method: 'POST', body: JSON.stringify(payload) });
@@ -474,6 +505,218 @@ document.getElementById('inspect-form').addEventListener('submit', async (e) => 
     toast(err.message);
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* Proof Lab & Bench                                                   */
+/* ------------------------------------------------------------------ */
+
+const benchSelection = { suites: new Set(), targets: new Set(), initialised: false };
+
+function passTone(rate) {
+  if (rate >= 0.999) return 'var(--ok)';
+  if (rate >= 0.5) return 'var(--warn)';
+  return 'var(--err)';
+}
+
+function scoreBar(rate) {
+  const pct = Math.max(0, Math.min(100, Math.round(rate * 100)));
+  return `<div class="score-bar"><span style="width:${pct}%;background:${passTone(rate)}"></span></div>`;
+}
+
+function renderBenchChoosers(data) {
+  const suiteWrap = document.getElementById('bench-suite-list');
+  const targetWrap = document.getElementById('bench-target-list');
+  if (!suiteWrap || !targetWrap) return;
+
+  const suites = data.benchSuites || [];
+  const suiteSignature = suites.map((s) => s.id).join(',');
+  if (suiteWrap.dataset.signature !== suiteSignature) {
+    suiteWrap.dataset.signature = suiteSignature;
+    suiteWrap.innerHTML = suites.map((s) => `
+      <label class="chip" title="${esc(s.description)}">
+        <input type="checkbox" class="bench-suite" value="${esc(s.id)}" checked />
+        <span>${esc(s.name)} <span class="muted">(${s.caseCount})</span></span>
+      </label>`).join('');
+    suites.forEach((s) => benchSelection.suites.add(s.id));
+  }
+
+  const targets = [
+    ...data.combos.map((c) => ({ value: c.id, label: `combo: ${c.id}`, note: c.name })),
+    ...data.providers.filter((p) => p.ready).map((p) => ({ value: `${p.id}/${p.defaultModel}`, label: `${p.id}/${p.defaultModel}`, note: p.name })),
+  ];
+  const targetSignature = targets.map((t) => t.value).join(',');
+  if (targetWrap.dataset.signature !== targetSignature) {
+    targetWrap.dataset.signature = targetSignature;
+    targetWrap.innerHTML = targets.map((t) => `
+      <label class="chip" title="${esc(t.note)}">
+        <input type="checkbox" class="bench-target" value="${esc(t.value)}" ${t.value === 'offline-proof' ? 'checked' : ''} ${t.value.startsWith('sandbox-sim/') ? 'checked' : ''} />
+        <span>${esc(t.label)}</span>
+      </label>`).join('');
+  }
+}
+
+function readBenchSelection() {
+  const suiteIds = [...document.querySelectorAll('.bench-suite:checked')].map((el) => el.value);
+  const targets = [...document.querySelectorAll('.bench-target:checked')].map((el) => el.value);
+  return { suiteIds, targets };
+}
+
+async function fetchJsonRaw(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    ...opts,
+  });
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  return { ok: res.ok, status: res.status, json };
+}
+
+async function runProof() {
+  const btn = document.getElementById('proof-run');
+  const summary = document.getElementById('proof-summary');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  summary.textContent = currentLang === 'ar' ? 'جارٍ تشغيل السيناريوهات…' : 'Running scenarios…';
+  try {
+    const { json } = await fetchJsonRaw('/api/proof/run', { method: 'POST', body: '{}' });
+    if (!json.results) throw new Error(json.error || 'proof run failed');
+    renderProof(json);
+  } catch (err) {
+    summary.textContent = `Proof failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderProof(report) {
+  const summary = document.getElementById('proof-summary');
+  const wrap = document.getElementById('proof-results');
+  const { summary: s } = report;
+  summary.innerHTML = `
+    <span class="badge ${s.allPassed ? 'badge-ok' : 'badge-err'}">${s.passed}/${s.scenarios} scenarios</span>
+    <span class="badge ${s.checksPassed === s.checks ? 'badge-ok' : 'badge-err'}">${s.checksPassed}/${s.checks} assertions</span>
+    <span class="badge badge-accent">${report.durationMs} ms total</span>
+    <span class="badge">real router · scripted network</span>`;
+
+  wrap.innerHTML = report.results.map((r) => `
+    <div class="proof-card ${r.passed ? 'proof-pass' : 'proof-fail'}">
+      <div class="proof-card-top">
+        <strong>${esc(r.name)}</strong>
+        <span class="badge ${r.passed ? 'badge-ok' : 'badge-err'}">${r.passed ? 'PASS' : 'FAIL'} · ${r.durationMs} ms</span>
+      </div>
+      <p class="muted">${esc(r.what)}</p>
+      <ul class="check-list">
+        ${r.checks.map((c) => `<li class="${c.passed ? 'check-ok' : 'check-bad'}">${c.passed ? '✓' : '✗'} ${esc(c.label)}${c.detail ? ` <span class="muted">— ${esc(c.detail)}</span>` : ''}</li>`).join('')}
+      </ul>
+      <details>
+        <summary class="muted">observations</summary>
+        <pre class="code-output small">${esc(JSON.stringify(r.observations, null, 2))}</pre>
+      </details>
+    </div>`).join('');
+}
+
+async function runBench() {
+  const btn = document.getElementById('bench-run');
+  const box = document.getElementById('bench-scorecards');
+  const { suiteIds, targets } = readBenchSelection();
+  if (suiteIds.length === 0 || targets.length === 0) {
+    toast(currentLang === 'ar' ? 'اختر حزمة وهدفاً واحداً على الأقل' : 'Pick at least one suite and one target');
+    return;
+  }
+  btn.disabled = true;
+  box.innerHTML = `<p class="muted">Running ${suiteIds.length} suite(s) against ${targets.length} target(s)…</p>`;
+  try {
+    const { json, ok } = await fetchJsonRaw('/api/bench/run', {
+      method: 'POST',
+      body: JSON.stringify({ suiteIds, targets, concurrency: 4 }),
+    });
+    if (!ok || !json.run) throw new Error(json.error || 'bench failed');
+    renderBenchRun(json.run);
+    await loadOverview();
+  } catch (err) {
+    box.innerHTML = `<p class="badge badge-err">${esc(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderBenchRun(run) {
+  const box = document.getElementById('bench-scorecards');
+  const detail = document.getElementById('bench-detail');
+  const cards = run.scorecards.map((c) => `
+    <div class="bench-card">
+      <div class="proof-card-top">
+        <strong>${esc(c.target)}</strong>
+        <span class="badge ${c.passRate >= 0.999 ? 'badge-ok' : c.passRate >= 0.5 ? 'badge-warn' : 'badge-err'}">${c.passed}/${c.cases} · ${Math.round(c.passRate * 100)}%</span>
+      </div>
+      ${scoreBar(c.passRate)}
+      <div class="bench-stats">
+        <span>score <strong>${(c.score * 100).toFixed(0)}%</strong></span>
+        <span>p50 <strong>${c.latencyMs.p50} ms</strong></span>
+        <span>p95 <strong>${c.latencyMs.p95} ms</strong></span>
+        <span>fallbacks <strong>${c.fallbacks}</strong></span>
+      </div>
+      <div class="muted">answered by: ${Object.entries(c.providers).map(([id, n]) => `${esc(id)} ×${n}`).join(' · ') || '—'}</div>
+      <div class="suite-breakdown">
+        ${c.suites.map((s) => `<span class="badge ${s.passRate >= 0.999 ? 'badge-ok' : s.passRate > 0 ? 'badge-warn' : 'badge-err'}">${esc(s.id)} ${s.passed}/${s.cases}</span>`).join('')}
+      </div>
+    </div>`).join('');
+
+  box.innerHTML = cards || '<p class="muted">No results.</p>';
+
+  const rows = [...run.results]
+    .sort((a, b) => Number(a.passed) - Number(b.passed) || a.target.localeCompare(b.target))
+    .map((r) => `<tr>
+      <td>${esc(r.target)}</td>
+      <td>${esc(r.caseId)}</td>
+      <td><span class="badge ${r.passed ? 'badge-ok' : 'badge-err'}">${r.passed ? 'pass' : 'fail'}</span></td>
+      <td>${esc(r.providerId || '—')}</td>
+      <td>${esc(r.latencyMs)} ms</td>
+      <td><code class="cell-code">${esc((r.output || r.error || '').slice(0, 90))}</code></td>
+      <td class="muted">${esc(r.detail)}</td>
+    </tr>`).join('');
+
+  detail.classList.remove('hidden');
+  detail.innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>Target</th><th>Case</th><th>Result</th><th>Provider</th><th>Latency</th><th>Output</th><th>Grader</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderBenchHistory(runs) {
+  const wrap = document.getElementById('bench-history');
+  if (!wrap) return;
+  if (!runs || runs.length === 0) {
+    wrap.innerHTML = '<p class="muted">No runs yet.</p>';
+    return;
+  }
+  wrap.innerHTML = runs.map((r) => `
+    <div class="row-between history-row">
+      <div>
+        <strong>${esc(r.name)}</strong>
+        <p class="muted">${esc(r.targets.join(', '))} · ${esc(r.suiteIds.join(', '))}</p>
+      </div>
+      <div class="row-inline">
+        <span class="badge ${r.passRate >= 0.999 ? 'badge-ok' : r.passRate >= 0.5 ? 'badge-warn' : 'badge-err'}">${r.passedCases}/${r.totalCases} · ${Math.round(r.passRate * 100)}%</span>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="window.__viewBenchRun('${esc(r.id)}')">View</button>
+      </div>
+    </div>`).join('');
+}
+
+window.__viewBenchRun = async (id) => {
+  try {
+    const { run } = await api(`/api/bench/runs/${encodeURIComponent(id)}`);
+    renderBenchRun(run);
+    document.getElementById('panel-proof').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    toast(err.message);
+  }
+};
+
+document.getElementById('proof-run')?.addEventListener('click', runProof);
+document.getElementById('bench-run')?.addEventListener('click', runBench);
 
 applyLang();
 loadOverview();

@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { Store } from '../db/store.mjs';
 import { GatewayRouter } from '../router/gateway.mjs';
 import { BatchRunner } from '../batch/runner.mjs';
+import { BenchRunner } from '../bench/runner.mjs';
+import { listSuiteSummaries } from '../bench/suites.mjs';
+import { runResilienceProof, listScenarios } from '../proof/resilienceLab.mjs';
+import { isProviderReady } from '../config/providerKinds.mjs';
 import { McpHandler } from '../mcp/server.mjs';
 import { inspectWorkspace } from '../craft/inspector.mjs';
 import { generateClientConfigs } from '../craft/clientConfigs.mjs';
@@ -126,10 +130,23 @@ async function writeOpenAISseStream(res, streamResult, meta) {
 
   if (streamResult.kind === 'openai-stream' && streamResult.response?.body) {
     const nodeStream = Readable.fromWeb(streamResult.response.body);
-    for await (const chunk of nodeStream) {
-      res.write(chunk);
+    try {
+      for await (const chunk of nodeStream) {
+        if (!res.write(chunk)) {
+          // Respect backpressure instead of buffering an unbounded stream.
+          await new Promise((resolve) => res.once('drain', resolve));
+        }
+      }
+      res.end();
+    } catch (err) {
+      // An upstream that dies mid-stream used to throw out of the request
+      // handler and leave the client hanging. Terminate the SSE frame instead.
+      try {
+        res.write(`data: ${JSON.stringify({ error: { message: `upstream stream aborted: ${err.message}` } })}\n\n`);
+        res.write('data: [DONE]\n\n');
+      } catch { /* client already gone */ }
+      res.end();
     }
-    res.end();
     return;
   }
 
@@ -139,29 +156,38 @@ async function writeOpenAISseStream(res, streamResult, meta) {
     const created = Math.floor(Date.now() / 1000);
     const decoder = new TextDecoder();
     let buffer = '';
-    for await (const rawChunk of Readable.fromWeb(streamResult.response.body)) {
-      buffer += decoder.decode(rawChunk, { stream: true });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (!payload) continue;
-        try {
-          const ev = JSON.parse(payload);
-          if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
-            res.write(`data: ${JSON.stringify({
-              id,
-              object: 'chat.completion.chunk',
-              created,
-              model: meta.model,
-              choices: [{ index: 0, delta: { content: ev.delta.text }, finish_reason: null }],
-            })}\n\n`);
+    const nodeStream = Readable.fromWeb(streamResult.response.body);
+    try {
+      for await (const rawChunk of nodeStream) {
+        buffer += decoder.decode(rawChunk, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          try {
+            const ev = JSON.parse(payload);
+            if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+              res.write(`data: ${JSON.stringify({
+                id,
+                object: 'chat.completion.chunk',
+                created,
+                model: meta.model,
+                choices: [{ index: 0, delta: { content: ev.delta.text }, finish_reason: null }],
+              })}\n\n`);
+            }
+          } catch {
+            // ignore non-JSON SSE control lines
           }
-        } catch {
-          // ignore non-JSON SSE control lines
         }
       }
+    } catch (err) {
+      try {
+        res.write(`data: ${JSON.stringify({ error: { message: `upstream stream aborted: ${err.message}` } })}\n\n`);
+      } catch { /* client already gone */ }
+      res.end();
+      return;
     }
     res.write(`data: ${JSON.stringify({
       id,
@@ -183,10 +209,12 @@ export function createBatchApp(config, deps = {}) {
   const store = deps.store ?? new Store(config.dbPath, config.masterKey, { enableDemo: config.enableDemo });
   const router = deps.router ?? new GatewayRouter(store, { fetchImpl: deps.fetchImpl });
   const batchRunner = deps.batchRunner ?? new BatchRunner(store, router);
+  const benchRunner = deps.benchRunner ?? new BenchRunner(store, router);
   const mcpHandler = new McpHandler({
     store,
     router,
     batchRunner,
+    benchRunner,
     workspaceRoot: config.workspaceRoot,
     baseUrl: `http://localhost:${config.port}`,
   });
@@ -226,9 +254,14 @@ export function createBatchApp(config, deps = {}) {
         return;
       }
 
+      if (req.method === 'GET' && pathname === '/favicon.ico') {
+        res.writeHead(204).end();
+        return;
+      }
+
       if (req.method === 'GET' && pathname === '/health') {
         const providers = store.listProviders(false);
-        const enabledReady = providers.filter((p) => p.enabled && (p.hasApiKey || p.kind === 'local-openai' || p.kind === 'simulator'));
+        const enabledReady = providers.filter((p) => isProviderReady({ ...p, apiKey: p.hasApiKey ? 'set' : null }));
         sendJson(res, 200, {
           status: 'ok',
           service: 'batch-ai-gateway',
@@ -260,7 +293,7 @@ export function createBatchApp(config, deps = {}) {
             owned_by: 'batch-combo',
           })),
           ...providers
-            .filter((p) => p.enabled && (p.hasApiKey || p.kind === 'local-openai' || p.kind === 'simulator'))
+            .filter((p) => isProviderReady({ ...p, apiKey: p.hasApiKey ? 'set' : null }))
             .flatMap((p) =>
               p.models.map((m) => ({
                 id: `${p.id}/${m}`,
@@ -392,12 +425,16 @@ export function createBatchApp(config, deps = {}) {
         sendJson(res, 200, {
           providers: providers.map((p) => ({
             ...p,
+            ready: isProviderReady({ ...p, apiKey: p.hasApiKey ? 'set' : null }),
             circuitBreaker: breakerMap[p.id] || null,
           })),
           combos: store.listCombos(),
           metrics: store.getMetrics(),
           recentLogs: store.listLogs(40),
           batches: store.listBatchJobs(20),
+          benchSuites: listSuiteSummaries(),
+          benchRuns: store.listBenchRuns(5),
+          proofScenarios: listScenarios(),
           clientConfigs: generateClientConfigs(origin, config.apiKey ? '<YOUR_BATCH_API_KEY>' : 'batch-local-dev'),
           authEnabled: Boolean(config.apiKey),
           uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
@@ -406,7 +443,12 @@ export function createBatchApp(config, deps = {}) {
       }
 
       if (req.method === 'GET' && pathname === '/api/providers') {
-        sendJson(res, 200, { providers: store.listProviders(false) });
+        sendJson(res, 200, {
+          providers: store.listProviders(false).map((p) => ({
+            ...p,
+            ready: isProviderReady({ ...p, apiKey: p.hasApiKey ? 'set' : null }),
+          })),
+        });
         return;
       }
 
@@ -529,6 +571,10 @@ export function createBatchApp(config, deps = {}) {
       if (req.method === 'POST' && pathname === '/api/batches') {
         const body = await readJsonBody(req);
         const items = Array.isArray(body.items) ? body.items : [];
+        if (items.length > 1000) {
+          sendJson(res, 413, { error: 'Batch limited to 1000 items per job' });
+          return;
+        }
         const job = batchRunner.submitJob({
           name: body.name,
           comboOrModel: body.comboOrModel || 'auto-free',
@@ -577,7 +623,56 @@ export function createBatchApp(config, deps = {}) {
         }
       }
 
-      if (req.method === 'POST' && pathname === '/api/craft/inspect') {
+      // ---------------- Bench & Proof Lab ----------------
+      if (req.method === 'GET' && pathname === '/api/bench/suites') {
+        sendJson(res, 200, { suites: listSuiteSummaries() });
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/bench/runs') {
+        const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 20));
+        sendJson(res, 200, { runs: store.listBenchRuns(limit) });
+        return;
+      }
+
+      const benchRunMatch = pathname.match(/^\/api\/bench\/runs\/([a-z0-9_-]+)$/i);
+      if (req.method === 'GET' && benchRunMatch) {
+        const run = store.getBenchRun(benchRunMatch[1]);
+        if (!run) {
+          sendJson(res, 404, { error: 'Bench run not found' });
+          return;
+        }
+        sendJson(res, 200, { run });
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/api/bench/run') {
+        const body = await readJsonBody(req);
+        const run = await benchRunner.run({
+          suiteIds: Array.isArray(body.suiteIds) ? body.suiteIds : body.suiteId ? [body.suiteId] : undefined,
+          targets: Array.isArray(body.targets) ? body.targets : body.target ? [body.target] : undefined,
+          concurrency: body.concurrency,
+          name: body.name,
+        });
+        sendJson(res, 201, { run });
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/proof/scenarios') {
+        sendJson(res, 200, { scenarios: listScenarios() });
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/api/proof/run') {
+        const body = await readJsonBody(req);
+        const report = await runResilienceProof({
+          only: Array.isArray(body.scenarios) ? body.scenarios : undefined,
+        });
+        sendJson(res, 200, report);
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/craft/inspect') {
         const body = await readJsonBody(req);
         const inspection = inspectWorkspace(config.workspaceRoot, body.path || '.');
         sendJson(res, 200, { inspection });
@@ -604,6 +699,7 @@ export function createBatchApp(config, deps = {}) {
     store,
     router,
     batchRunner,
+    benchRunner,
     mcpHandler,
     close: async () => {
       await new Promise((resolve) => server.close(() => resolve()));

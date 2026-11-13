@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import { CircuitBreakerRegistry, parseRetryAfterMs } from './circuitBreaker.mjs';
 import { RateLimiterRegistry } from './rateLimiter.mjs';
 import { buildCacheKey, shouldUseCache } from './cache.mjs';
+import { isProviderReady } from '../config/providerKinds.mjs';
+import { createMicroCompletion, streamMicroCompletion } from '../engine/microSolver.mjs';
 import {
   anthropicResponseToOpenAI,
   createSimulatorCompletion,
@@ -21,9 +23,7 @@ export class GatewayRouter {
   }
 
   _isProviderReady(provider) {
-    if (!provider || !provider.enabled) return false;
-    if (provider.kind === 'simulator' || provider.kind === 'local-openai') return true;
-    return Boolean(provider.apiKey && provider.apiKey.trim());
+    return isProviderReady(provider);
   }
 
   resolveTargets(requestedModel) {
@@ -91,6 +91,22 @@ export class GatewayRouter {
 
   async _callProvider({ provider, model, reqBody }) {
     const start = Date.now();
+
+    if (provider.kind === 'micro') {
+      // Deterministic, in-process engine: no network, no key, no cost.
+      if (reqBody.stream) {
+        return {
+          kind: 'simulator-stream',
+          generator: streamMicroCompletion(reqBody, model),
+          latencyMs: Date.now() - start,
+        };
+      }
+      return {
+        kind: 'json',
+        data: createMicroCompletion(reqBody, model),
+        latencyMs: Date.now() - start,
+      };
+    }
 
     if (provider.kind === 'simulator') {
       if (reqBody.stream) {
@@ -218,6 +234,13 @@ export class GatewayRouter {
           max_tokens: reqBody.max_tokens,
           response_format: reqBody.response_format,
           tools: reqBody.tools,
+          tool_choice: reqBody.tool_choice,
+          top_p: reqBody.top_p,
+          stop: reqBody.stop,
+          seed: reqBody.seed,
+          n: reqBody.n,
+          presence_penalty: reqBody.presence_penalty,
+          frequency_penalty: reqBody.frequency_penalty,
         })
       : null;
 
@@ -401,6 +424,9 @@ export class GatewayRouter {
 
     if (provider.kind === 'simulator') {
       return { ok: true, latencyMs: 1, models: provider.models, message: 'Sandbox simulator ready' };
+    }
+    if (provider.kind === 'micro') {
+      return { ok: true, latencyMs: 0, models: provider.models, message: 'Deterministic micro engine ready (offline)' };
     }
     if (provider.kind !== 'local-openai' && !provider.apiKey) {
       return { ok: false, error: 'No API key configured for this provider' };
